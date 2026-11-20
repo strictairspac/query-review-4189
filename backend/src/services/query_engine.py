@@ -7,6 +7,26 @@ from sqlalchemy import text
 from ..config.database import engine
 ALLOWED_FUNCTIONS={'SUM','COUNT','AVG','MIN','MAX','ROUND','COALESCE','CAST'}
 ALLOWED_COLUMNS={'customer','route','amount','temperature','invoice_id','status'}
+
+
+class UsageMeter:
+    """Accumulates wall-clock time spent inside database calls.
+
+    Time is added in ``finally`` blocks, so a statement that times out still
+    contributes the time it actually occupied in the database.
+    """
+
+    def __init__(self):
+        self.total_ms = 0.0
+        self.statements = []
+
+    def record(self, label, started):
+        ms = round((time.perf_counter() - started) * 1000, 3)
+        self.statements.append({'label': label, 'ms': ms})
+        self.total_ms += ms
+        return ms
+
+
 def validate_sql(sql):
     try: trees=sqlglot.parse(sql,read='postgres')
     except Exception as exc: raise ValueError('SQL 无法解析：'+str(exc)[:180])
@@ -21,23 +41,36 @@ def validate_sql(sql):
         if f.sql_name() not in ALLOWED_FUNCTIONS: raise ValueError('不允许函数：'+f.sql_name())
     if len(list(tree.walk()))>250: raise ValueError('SQL 结构过大')
     return tree.sql(dialect='postgres')
-def execute_query(sql):
+
+
+def execute_query(sql, meter=None, side='query'):
     sql=validate_sql(sql)
+    meter = meter or UsageMeter()
     with engine.connect() as conn:
         with conn.begin():
             conn.execute(text('SET TRANSACTION READ ONLY'))
             conn.execute(text("SET LOCAL statement_timeout='2500ms'"))
             conn.execute(text('SET LOCAL ROLE query_reader'))
-            plan=conn.execute(text('EXPLAIN (ANALYZE, FORMAT JSON, BUFFERS) '+sql)).scalar()
             started=time.perf_counter()
-            cursor=conn.execute(text(sql)); columns=list(cursor.keys()); rows=cursor.fetchmany(1001)
+            try:
+                plan=conn.execute(text('EXPLAIN (ANALYZE, FORMAT JSON, BUFFERS) '+sql)).scalar()
+            finally:
+                plan_ms=meter.record(side+':explain',started)
+            started=time.perf_counter()
+            try:
+                cursor=conn.execute(text(sql)); columns=list(cursor.keys()); rows=cursor.fetchmany(1001)
+            finally:
+                select_ms=meter.record(side+':select',started)
             if len(rows)>1000: raise ValueError('结果超过 1000 行，请聚合或 LIMIT')
             rows=[[str(v) if v is not None else None for v in row] for row in rows]
-            return {'columns':columns,'rows':rows,'row_count':len(rows),'elapsed_ms':round((time.perf_counter()-started)*1000,3),'plan':plan}
-def compare(original,candidate):
-    left=execute_query(original);right=execute_query(candidate)
+            return {'columns':columns,'rows':rows,'row_count':len(rows),'elapsed_ms':round((time.perf_counter()-started)*1000,3),'db_ms':round(plan_ms+select_ms,3),'plan':plan}
+
+
+def compare(original,candidate,meter=None):
+    meter = meter or UsageMeter()
+    left=execute_query(original,meter,'original');right=execute_query(candidate,meter,'candidate')
     canon=lambda data:Counter(json.dumps(row,ensure_ascii=False) for row in data['rows'])
     a,b=canon(left),canon(right)
     equivalent=len(left['columns'])==len(right['columns']) and a==b
     digest=lambda x:hashlib.sha256(json.dumps(sorted(canon(x).items()),ensure_ascii=False).encode()).hexdigest()
-    return {'equivalent':equivalent,'comparison':'忽略行顺序、保留重复行；按输出列位置比较，数字按数据库文本表示','original':left,'candidate':right,'original_checksum':digest(left),'candidate_checksum':digest(right),'missing_rows':list((a-b).elements())[:10],'extra_rows':list((b-a).elements())[:10],'note':'执行时间受缓存与机器负载影响；不据一次耗时断言优化收益'}
+    return {'equivalent':equivalent,'comparison':'忽略行顺序、保留重复行；按输出列位置比较，数字按数据库文本表示','original':left,'candidate':right,'original_checksum':digest(left),'candidate_checksum':digest(right),'missing_rows':list((a-b).elements())[:10],'extra_rows':list((b-a).elements())[:10],'db_ms':round(meter.total_ms,3),'note':'执行时间受缓存与机器负载影响；不据一次耗时断言优化收益'}

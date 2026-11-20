@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped,mapped_column
-from sqlalchemy import String
+from sqlalchemy import String,ForeignKey
 from ..config.database import Base
 class User(Base):
     __tablename__='users'
@@ -7,3 +7,4 @@ class User(Base):
     email:Mapped[str]=mapped_column(String(120),unique=True)
     password_hash:Mapped[str]=mapped_column(String(200))
     role:Mapped[str]=mapped_column(String(20))
+    group_id:Mapped[int|None]=mapped_column(ForeignKey('groups.id'),nullable=True)

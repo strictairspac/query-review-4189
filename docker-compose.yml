@@ -31,6 +31,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET:-local-demo-query-review-change-before-production-20261117}
       SEED_DEMO: ${SEED_DEMO:-true}
+      QUOTA_RESERVE_MS: ${QUOTA_RESERVE_MS:-12000}
+      QUOTA_DEFAULT_GRANT_MS: ${QUOTA_DEFAULT_GRANT_MS:-600000}
+      QUOTA_MAX_TOPUP_MS: ${QUOTA_MAX_TOPUP_MS:-600000}
+      QUOTA_LEASE_SECONDS: ${QUOTA_LEASE_SECONDS:-60}
+      QUOTA_WAIT_RETRY_SECONDS: ${QUOTA_WAIT_RETRY_SECONDS:-2}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
     ports: ["${BACKEND_PORT:-19240}:8000"]
     volumes: ["artifacts:/artifacts"]
     depends_on:

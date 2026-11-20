@@ -7,10 +7,12 @@ from .routes import auth,sample,batch,evidence,audit
 from .middlewares.audit import AuditMiddleware
 from .middlewares.request_id import RequestIdMiddleware
 from .config.database import engine
+from .config.schema import init_schema
 from sqlalchemy import text
 from .services.batch import queue
 @asynccontextmanager
 async def lifespan(app):
+    init_schema()
     if os.getenv('SEED_DEMO','true')=='true':
         try:
             from scripts.seed_demo import seed
